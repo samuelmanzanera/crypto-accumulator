@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"math/big"
 
-	"github.com/cloudflare/bn256"
+	bls12381 "github.com/kilic/bls12-381"
 )
 
 // SecretKey holds the secret parameter
@@ -12,10 +12,12 @@ type SecretKey struct {
 	Alpha *big.Int
 }
 
-// NewSecretKey generates a new secret key on the bn256 order
+// NewSecretKey generates a new secret key on the G1 order
 func NewSecretKey() (*SecretKey, error) {
-	// Generate secret alpha
-	alpha, err := rand.Int(rand.Reader, bn256.Order)
+	g1 := bls12381.NewG1()
+
+	// Generate secret alpha by computing with the order of G1
+	alpha, err := rand.Int(rand.Reader, g1.Q())
 	if err != nil {
 		return nil, err
 	}
@@ -26,23 +28,24 @@ func NewSecretKey() (*SecretKey, error) {
 // ToPublicKey creates public key by scalar multiplication of the secret key over G2 generator
 func (s SecretKey) ToPublicKey() PublicKey {
 	// Generate the generator points for G1 and G2
-	g := new(bn256.G1).ScalarBaseMult(big.NewInt(1))  // G1 generator
-	g2 := new(bn256.G2).ScalarBaseMult(big.NewInt(1)) // G2 generator
+	g1 := bls12381.NewG1()
+	g2 := bls12381.NewG2()
 
 	// Compute pk.Alpha = g2^alpha
-	pkAlpha := new(bn256.G2).ScalarMult(g2, s.Alpha)
+	pkAlpha := g2.New()
+	g2.MulScalar(pkAlpha, g2.One(), bls12381.NewFr().FromBytes(s.Alpha.Bytes()))
 
 	// Create the public key
 	return PublicKey{
-		G1:    g,
-		G2:    g2,
+		G1:    g1.One(),
+		G2:    g2.One(),
 		Alpha: pkAlpha,
 	}
 }
 
 // PublicKey holds the public counterpart of the secret
 type PublicKey struct {
-	G1    *bn256.G1
-	G2    *bn256.G2
-	Alpha *bn256.G2 // g2^alpha
+	G1    *bls12381.PointG1
+	G2    *bls12381.PointG2
+	Alpha *bls12381.PointG2 // g2^alpha
 }

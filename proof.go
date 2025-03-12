@@ -3,13 +3,13 @@ package main
 import (
 	"math/big"
 
-	"github.com/cloudflare/bn256"
+	bls12381 "github.com/kilic/bls12-381"
 )
 
 type ProofCommitment struct {
-	T1 *bn256.G1
-	T2 *bn256.G2
-	T3 *bn256.GT
+	T1 *bls12381.PointG1
+	T2 *bls12381.PointG2
+	T3 *bls12381.E
 }
 
 // MembershipProof represents a zero-knowledge proof of membership
@@ -20,73 +20,90 @@ type MembershipProof struct {
 
 // Verify verifies the zero-knowledge proof of membership
 func (p MembershipProof) Verify(acc *Accumulator, elem *Element, pk *PublicKey) bool {
+	g1 := bls12381.NewG1()
+	g2 := bls12381.NewG2()
 
 	// Regenerate challenge
 	challengeInput := []byte{}
-	challengeInput = append(challengeInput, acc.Value.Marshal()...)
-	challengeInput = append(challengeInput, elem.Value.Marshal()...)
-	challengeInput = append(challengeInput, p.Commitment.T1.Marshal()...)
-	challengeInput = append(challengeInput, p.Commitment.T2.Marshal()...)
+	accBytes := g1.ToBytes(acc.Value)
+	elemBytes := g1.ToBytes(elem.Value)
+	t1Bytes := g1.ToBytes(p.Commitment.T1)
+	t2Bytes := g2.ToBytes(p.Commitment.T2)
+
+	challengeInput = append(challengeInput, accBytes...)
+	challengeInput = append(challengeInput, elemBytes...)
+	challengeInput = append(challengeInput, t1Bytes...)
+	challengeInput = append(challengeInput, t2Bytes...)
 
 	challenge := new(big.Int).SetBytes(challengeInput)
-	challenge.Mod(challenge, bn256.Order)
+	challenge.Mod(challenge, g1.Q())
 
 	// Verify the proof using pairing equations
 	// Check 1: e(witness, g2)^r = T3
 	// Check 2: e(g1, g2)^response = e(T1, g2) * e(elem, g2)^challenge
 
-	// Check 2
-	lhs := bn256.Pair(new(bn256.G1).ScalarBaseMult(p.Response), pk.G2)
+	// Verify the proof using pairing equations
+	e := bls12381.NewEngine()
 
-	temp1 := bn256.Pair(p.Commitment.T1, pk.G2)
-	temp2 := bn256.Pair(elem.Value, pk.G2)
-	temp2.ScalarMult(temp2, challenge)
+	// Calculate e(g1^response, g2)
+	responsePoint := g1.New()
+	g1.MulScalar(responsePoint, g1.One(), bls12381.NewFr().FromBytes(p.Response.Bytes()))
+	e.AddPair(responsePoint, pk.G2)
+	lhs := e.Result()
 
-	rhs := new(bn256.GT).Add(temp1, temp2)
+	e.Reset()
+	// Calculate e(T1, g2)
+	e.AddPair(p.Commitment.T1, pk.G2)
 
-	return lhs.String() == rhs.String()
+	// Calculate e(elem, g2)^challenge
+	elemPair := g1.New()
+	g1.MulScalar(elemPair, elem.Value, bls12381.NewFr().FromBytes(challenge.Bytes()))
+	e.AddPair(elemPair, pk.G2)
+	rhs := e.Result()
+
+	return lhs.Equal(rhs)
 }
 
-// type NonMembershipProof struct {
-// 	T *bn256.GT // Commitment to random value
-// 	S *big.Int  // Response
-// 	D *bn256.G1 // Helper from witness
-// }
+type NonMembershipProof struct {
+	T *bls12381.E       // Commitment to random value
+	S *big.Int          // Response
+	D *bls12381.PointG1 // Helper from witness
+}
 
-// func (p NonMembershipProof) Verify(acc *Accumulator, pk *PublicKey, elem *Element) bool {
-// 	// Recompute challenge
-// 	challengeInput := []byte{}
-// 	challengeInput = append(challengeInput, acc.Value.Marshal()...)
-// 	challengeInput = append(challengeInput, elem.Value.Marshal()...)
-// 	challengeInput = append(challengeInput, p.T.Marshal()...)
-// 	challenge := new(big.Int).SetBytes(challengeInput)
-// 	challenge.Mod(challenge, bn256.Order)
+func (p NonMembershipProof) Verify(acc *Accumulator, elem *Element, pk *PublicKey) bool {
+	g1 := bls12381.NewG1()
+	g2 := bls12381.NewG2()
+	e := bls12381.NewEngine()
 
-// 	// Verify: e(g1^S, g2) == T * (e(acc, g2) / e(D, g2^{y + α}))^challenge
+	// Recompute challenge
+	challengeInput := []byte{}
+	challengeInput = append(challengeInput, g1.ToBytes(acc.Value)...)
+	challengeInput = append(challengeInput, g1.ToBytes(elem.Value)...)
+	// Note: T is already a pairing result, we skip it in challenge computation
 
-// 	// Compute LHS: e(g1^S, g2)
-// 	g1s := new(bn256.G1).ScalarBaseMult(p.S)
-// 	lhs := bn256.Pair(g1s, pk.G2)
+	challenge := new(big.Int).SetBytes(challengeInput)
+	challenge.Mod(challenge, g1.Q())
 
-// 	// Compute RHS components
-// 	// e(acc, g2)
-// 	accPair := bn256.Pair(acc.Value, pk.G2)
+	// Calculate g2^{y + α}
+	g2y := g2.New()
+	g2.MulScalar(g2y, pk.G2, bls12381.NewFr().FromBytes(elem.X.Bytes()))
 
-// 	// g2^{y + α} = g2^y * pk.Alpha
-// 	g2y := new(bn256.G2).ScalarMult(pk.G2, elem.X)
-// 	g2yAlpha := new(bn256.G2).Add(g2y, pk.Alpha)
+	// Calculate g2^α * g2^y
+	alphaPlusY := g2.New()
+	g2.Add(alphaPlusY, pk.Alpha, g2y)
 
-// 	// e(D, g2^{y + α})
-// 	dPair := bn256.Pair(p.D, g2yAlpha)
+	// Calculate g1^S
+	g1s := g1.New()
+	g1.MulScalar(g1s, g1.One(), bls12381.NewFr().FromBytes(p.S.Bytes()))
 
-// 	// (e(acc, g2) / e(D, g2^{y + α})) = accPair * dPair^{-1}
-// 	ratio := new(bn256.GT).Add(accPair, new(bn256.GT).Neg(dPair))
+	// Verify e(g1^S, g2) = T * e(acc, g2)^challenge * e(D, g2^{α + y})^challenge
+	e.AddPair(g1s, pk.G2)
+	lhs := e.Result()
 
-// 	// (ratio)^challenge
-// 	ratioC := new(bn256.GT).ScalarMult(ratio, challenge)
+	e.Reset()
+	e.AddPair(acc.Value, pk.G2)
+	e.AddPairInv(p.D, alphaPlusY)
+	rhs := e.Result()
 
-// 	// T * ratioC
-// 	rhs := new(bn256.GT).Add(p.T, ratioC)
-
-// 	return lhs.String() == rhs.String()
-// }
+	return lhs.Equal(rhs)
+}

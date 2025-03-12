@@ -2,7 +2,9 @@ module github.com/samuelmanzanera/accumulator-go
 
 go 1.22.4
 
-require github.com/cloudflare/bn256 v0.0.0-20241212004005-a4a408366973
+require (
+	github.com/kilic/bls12-381 v0.1.0
+)
 
 require (
 	golang.org/x/crypto v0.31.0 // indirect

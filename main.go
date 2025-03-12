@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/cloudflare/bn256"
+	bls12381 "github.com/kilic/bls12-381"
 )
 
 func setup() (*Accumulator, *SecretKey, *PublicKey, error) {
@@ -29,8 +29,11 @@ func main() {
 	// Create element using hash
 	message := []byte("test_element")
 	x := HashToInt(message)
+	g1 := bls12381.NewG1()
+	elemValue := g1.New()
+	g1.MulScalar(elemValue, g1.One(), bls12381.NewFr().FromBytes(x.Bytes()))
 	elem := &Element{
-		Value: new(bn256.G1).ScalarBaseMult(x),
+		Value: elemValue,
 		X:     x,
 	}
 
@@ -52,8 +55,11 @@ func main() {
 	// Create non-element using different hash
 	nonMessage := []byte("non_member_element")
 	y := HashToInt(nonMessage)
+	nonelemValue := g1.New()
+
+	g1.MulScalar(nonelemValue, g1.One(), bls12381.NewFr().FromBytes(y.Bytes()))
 	nonelem := &Element{
-		Value: new(bn256.G1).ScalarBaseMult(y),
+		Value: nonelemValue,
 		X:     y,
 	}
 
@@ -113,9 +119,11 @@ func main() {
 	fmt.Println("Testing invalid proof scenarios:")
 
 	// Test 1: Tampered element value
+	tamperedValue := g1.New()
+	g1.MulScalar(tamperedValue, g1.One(), bls12381.NewFr().FromBytes(big.NewInt(43).Bytes()))
 	tamperedElem := &Element{
-		Value: new(bn256.G1).ScalarBaseMult(new(big.Int).SetInt64(43)), // Different value
-		X:     elem.X,                                                  // Same X value as the valid element
+		Value: tamperedValue, // Different value
+		X:     elem.X,        // Same X value as the valid element
 	}
 	isValidProof = zkProof.Verify(acc, tamperedElem, pk)
 	if isValidProof {
@@ -135,9 +143,12 @@ func main() {
 	fmt.Println("✓ Proof correctly failed for tampered response")
 
 	// Test 3: Wrong element trying to use valid proof
+	wrongValue := g1.New()
+	wrongX := new(big.Int).SetInt64(99)
+	g1.MulScalar(wrongValue, g1.One(), bls12381.NewFr().FromBytes(wrongX.Bytes()))
 	wrongElem := &Element{
-		Value: new(bn256.G1).ScalarBaseMult(new(big.Int).SetInt64(99)),
-		X:     new(big.Int).SetInt64(99),
+		Value: wrongValue,
+		X:     wrongX,
 	}
 	isValidProof = zkProof.Verify(acc, wrongElem, pk)
 	if isValidProof {
@@ -146,4 +157,17 @@ func main() {
 	fmt.Println("✓ Proof correctly failed for wrong element")
 
 	fmt.Println("All invalid membership proof tests passed successfully!")
+
+	// // Generate ZK proof of membership
+	// zkProofNonMem, err := nonMembershipWitness.ZkProof(acc, nonelem, pk)
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// // Verify ZK proof
+	// isValidProofNonMem := zkProofNonMem.Verify(acc, nonelem, pk)
+	// if !isValidProofNonMem {
+	// 	panic("ZK proof verification failed")
+	// }
+	// fmt.Println("ZK proof verification successful!")
 }
